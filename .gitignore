@@ -1,0 +1,28 @@
+# Secrets — never commit your API key
+.env
+.env.local
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Generated data / indexes / logs
+data/
+*.faiss
+*.pkl
+*.log
+
+# OS / editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
