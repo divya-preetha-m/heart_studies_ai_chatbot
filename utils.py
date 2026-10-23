@@ -36,7 +36,9 @@ APP_TITLE = "Heart Studies AI"
 APP_ICON = "\U0001fac0"  # 🫀 anatomical heart
 APP_TAGLINE = "Your AI study buddy for heart anatomy & cardiovascular physiology"
 
-DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+# NOTE: gemini-2.5-flash was retired for new API keys (404 NOT_FOUND). Google's
+# current recommendation is gemini-3.8-flash. Override with GEMINI_MODEL in .env.
+DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
 # Upload safety limits
@@ -342,6 +344,13 @@ def friendly_api_error(exc: Exception) -> str:
         return "\u23f1\ufe0f **The request timed out.** Check your internet connection and try again."
     if "connection" in lowered or "network" in lowered or "dns" in lowered:
         return "\U0001f4f6 **Network problem while reaching Gemini.** Check your internet connection and try again."
+    if "404" in text and ("not_found" in lowered or "not found" in lowered or "no longer available" in lowered):
+        return (
+            f"\U0001f6e1\ufe0f **The Gemini model `{get_model_name()}` is not available for your API key. "
+            "It may have been retired.** Set `GEMINI_MODEL` in your `.env` file to a model your key "
+            "can use (list them at https://aistudio.google.com/apikey under your key's models), "
+            "then restart the app."
+        )
     # Unknown problems: be honest but do not leak internals.
     return f"\U0001f6a8 **Something went wrong while contacting Gemini.** Details: {text[:300]}"
 

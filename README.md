@@ -343,6 +343,14 @@ Free API keys have per-minute and per-day limits. Wait a minute and retry; check
 <https://aistudio.google.com/usage>. The app already retries twice with backoff before
 showing this message.
 
+### 🛡️ `404 NOT_FOUND … 'models/gemini-X.Y-flash' is no longer available to new users`
+
+Google retires older Gemini models periodically. The app's built-in default is kept
+current (see `DEFAULT_GEMINI_MODEL` in `utils.py`), but if you pinned a model with
+`GEMINI_MODEL` in `.env` and it disappears, either remove that line to use the default
+or point it at a model your key can access. Transient `503 UNAVAILABLE` / "high demand"
+errors on a valid model are Google-side capacity issues — wait a minute and retry.
+
 ### ⚠️ "Gemini rejected the API key" / HTTP 401
 
 The key in `.env` is wrong, truncated, or belongs to a different Google project. Copy it
