@@ -341,7 +341,16 @@ Remove the password in a PDF tool and upload again.
 
 Free API keys have per-minute and per-day limits. Wait a minute and retry; check usage at
 <https://aistudio.google.com/usage>. The app already retries twice with backoff before
-showing this message.
+showing this message, and because Gemini counts quotas **per model**, it automatically
+retries on a second model first (see the fallback note in the 404 section below) — so you
+usually never see this.
+
+### 🚨 "Gemini returned an empty response"
+
+Gemini replied, but with no text. This happened with the newer `gemini-3.x` models, which
+send their reply as structured content blocks instead of a plain string; the app now
+flattens every reply format and retries once before showing this. If it still appears, the
+service is under heavy load — wait a moment and press the button again.
 
 ### 🛡️ `404 NOT_FOUND … 'models/gemini-X.Y-flash' is no longer available to new users`
 
@@ -350,6 +359,11 @@ current (see `DEFAULT_GEMINI_MODEL` in `utils.py`), but if you pinned a model wi
 `GEMINI_MODEL` in `.env` and it disappears, either remove that line to use the default
 or point it at a model your key can access. Transient `503 UNAVAILABLE` / "high demand"
 errors on a valid model are Google-side capacity issues — wait a minute and retry.
+
+**Automatic model fallback:** when the default model is overloaded, times out, returns
+nothing or hits its quota, the app silently makes one attempt on `FALLBACK_GEMINI_MODEL`
+(same file) before giving you an error, because Gemini quotas are counted per model. This
+fallback is skipped when you set `GEMINI_MODEL` yourself — your choice is respected.
 
 ### ⚠️ "Gemini rejected the API key" / HTTP 401
 

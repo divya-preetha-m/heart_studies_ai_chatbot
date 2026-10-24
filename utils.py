@@ -39,6 +39,9 @@ APP_TAGLINE = "Your AI study buddy for heart anatomy & cardiovascular physiology
 # NOTE: gemini-2.5-flash was retired for new API keys (404 NOT_FOUND). Google's
 # current recommendation is gemini-3.8-flash. Override with GEMINI_MODEL in .env.
 DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
+# Used automatically when the default model is overloaded/timing out (measured
+# at ~50s+ per reply during peak demand). Ignored if GEMINI_MODEL is set by hand.
+FALLBACK_GEMINI_MODEL = "gemini-3.5-flash"
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
 # Upload safety limits
@@ -293,12 +296,13 @@ class MissingAPIKeyError(RuntimeError):
     """Raised when GOOGLE_API_KEY is not configured (handled gracefully downstream)."""
 
 
-def get_llm(temperature: float = 0.2):
+def get_llm(temperature: float = 0.2, model: Optional[str] = None):
     """Create a LangChain chat model for Google Gemini.
 
-    The API key comes from the environment (never from source code). We import
-    the class lazily so the app can still start (and show a helpful message)
-    even if the LangChain packages are broken or missing.
+    `model` overrides the configured model (used for the automatic fallback
+    when the main model is overloaded). The API key comes from the environment
+    (never from source code). We import the class lazily so the app can still
+    start (and show a helpful message) even if LangChain is broken or missing.
     """
     from langchain_google_genai import ChatGoogleGenerativeAI
 
@@ -309,7 +313,7 @@ def get_llm(temperature: float = 0.2):
             "GOOGLE_API_KEY is not set. Copy .env.example to .env and add your Gemini key."
         )
     return ChatGoogleGenerativeAI(
-        model=get_model_name(),
+        model=model or get_model_name(),
         temperature=temperature,
         google_api_key=api_key,  # NB: the field on ChatGoogleGenerativeAI is `google_api_key`
         timeout=60,
@@ -369,7 +373,38 @@ def invoke_llm_prompt(
         llm = get_llm(temperature=temperature)
     except Exception as exc:  # noqa: BLE001
         return None, friendly_api_error(exc)
-    return safe_invoke(llm, prompt)
+
+    text, error = safe_invoke(llm, prompt)
+
+    # Automatic fallback: if the main model is overloaded/timed out/blank and
+    # the student did not pick a model themselves, try a second model once.
+    # Without this, a busy default model makes the whole app feel broken.
+    if text is not None or not _is_transient_error(error):
+        return text, error
+    if os.environ.get("GEMINI_MODEL", "").strip():
+        return text, error  # user chose this model explicitly — respect it
+    try:
+        fallback = get_llm(temperature=temperature, model=FALLBACK_GEMINI_MODEL)
+    except Exception:  # noqa: BLE001 - never mask the original, useful error
+        return text, error
+    fb_text, fb_error = safe_invoke(fallback, prompt)
+    if fb_text is not None:
+        return fb_text, None
+    return text, error
+
+
+def _is_transient_error(friendly_message: Optional[str]) -> bool:
+    """True for failures where a different Gemini model may still succeed.
+
+    Gemini quotas are counted PER MODEL, so a 429 on one model often clears by
+    using another — same for overload/timeout/blank-reply hiccups.
+    """
+    if not friendly_message:
+        return False
+    return any(
+        marker in friendly_message
+        for marker in ("overloaded", "timed out", "empty response", "rate limit", "quota")
+    )
 
 
 def safe_invoke(llm, prompt: str) -> tuple[Optional[str], Optional[str]]:
@@ -384,13 +419,46 @@ def safe_invoke(llm, prompt: str) -> tuple[Optional[str], Optional[str]]:
     except Exception as exc:  # noqa: BLE001 - we translate every failure for the user
         return None, friendly_api_error(exc)
 
-    text = getattr(response, "content", response)
-    if isinstance(text, list):  # some LangChain versions return content blocks
-        text = "".join(block if isinstance(block, str) else getattr(block, "text", "") for block in text)
-    text = str(text).strip()
+    text = _flatten_content(getattr(response, "content", response))
     if not text:
-        return None, "\U0001f6a8 Gemini returned an empty response. Please try again."
+        # A blank reply is rare but happens under load — retry once before giving up.
+        try:
+            text = _flatten_content(getattr(llm.invoke(prompt), "content", ""))
+        except Exception:  # noqa: BLE001 - the retry must never raise either
+            text = ""
+    if not text:
+        return None, (
+            "\U0001f6a8 **Gemini returned an empty response.** This usually means the "
+            "service is under heavy load — wait a moment and try again."
+        )
     return text, None
+
+
+def _flatten_content(content) -> str:
+    """Turn a Gemini reply into plain text.
+
+    Depending on the model/SDK version the `content` field arrives as a plain
+    string, a list of string parts, or a list of DICT blocks like
+    {'type': 'text', 'text': '...'} (seen with gemini-3.x-flash). Handling all
+    three keeps a perfectly good answer from being misread as an empty reply.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, dict):  # a single block rather than a list of them
+        return str(content.get("text", "") or "").strip()
+    if isinstance(content, (list, tuple)):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict):
+                parts.append(str(block.get("text", "") or ""))
+            else:
+                parts.append(str(getattr(block, "text", "") or ""))
+        return "".join(parts).strip()
+    return str(content).strip()
 
 
 # ---------------------------------------------------------------------------
