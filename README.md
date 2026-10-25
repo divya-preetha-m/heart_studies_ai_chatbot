@@ -415,8 +415,9 @@ function size limits. Community Cloud is built for exactly this stack.
 1. Go to <https://share.streamlit.io> → **New app** → pick this repository, branch `main`,
    main file `app.py`.
 2. Open **Advanced settings** and set:
-   - **Python version → 3.13** — the pinned wheels are built for 3.11–3.13; 3.14/3.15
-     have no `torch`/`faiss-cpu` wheels, and Community Cloud's default may be newer.
+   - **Python version** — `3.13` matches local development, but the cloud default of
+     `3.14` also works (verified on a live deploy: `torch` has a 3.14 CPU wheel and
+     `faiss-cpu` is an `abi3` build). Only 3.15+ is unsafe — no torch wheels yet.
    - **Secrets** → paste (same names as your `.env`):
 
      ```toml
@@ -435,6 +436,15 @@ function size limits. Community Cloud is built for exactly this stack.
 **Keep the CPU-torch lines in `requirements.txt`.** The `--extra-index-url` line and the
 `torch==2.14.1+cpu` pin are what make the app fit Community Cloud's 1 GB resource limit;
 plain `torch` would install the CUDA build and fail the deploy.
+
+### 📦 Build log says `error: No solution found when resolving dependencies` (then succeeds)
+
+**This is harmless.** Community Cloud first tries `uv`, whose default "first index" safety
+rule sees `requests` on `download.pytorch.org/whl/cpu` (it only carries an old version) and
+gives up. The platform then automatically retries with plain **pip**, which consults both
+indexes correctly — look a few lines further down for
+`🐍 Python dependencies were installed … using pip` followed by `📦 Processed dependencies!`
+and `Uvicorn server started`. If those are present, the build succeeded.
 
 **Free-tier limits to know:** ~1 GB RAM per app, 3 apps per account, and apps sleep after
 a period of inactivity (the first request after waking takes ~30 seconds).
