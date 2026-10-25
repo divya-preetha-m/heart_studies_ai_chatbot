@@ -27,6 +27,7 @@ Built with **Streamlit + LangChain + Google Gemini + sentence-transformers + FAI
 10. [Testing](#10-testing)
 11. [Security and medical safety](#11-security-and-medical-safety)
 12. [Troubleshooting (real error messages)](#12-troubleshooting-real-error-messages)
+13. [Deploying to Streamlit Community Cloud](#13-deploying-to-streamlit-community-cloud)
 
 ---
 
@@ -398,6 +399,45 @@ streamlit run app.py --server.port 8787
 
 Stop the server (Ctrl+C) and run it again. Streamlit reloads `app.py` on save, but changes
 in imported modules (`rag.py`, `quiz.py`, `utils.py`) sometimes need a full restart.
+
+---
+
+## 13. Deploying to Streamlit Community Cloud
+
+**Why not Vercel?** Vercel's Python runtime only runs ASGI/WSGI apps (FastAPI, Flask,
+Django) as short-lived serverless functions — Streamlit is a long-running server with its
+own WebSocket sessions, so it cannot run there. Even after a rewrite, the PyPI `torch`
+wheel for Linux is 555 MB and pulls ~3 GB of NVIDIA CUDA libraries, well past Vercel's
+function size limits. Community Cloud is built for exactly this stack.
+
+**Steps** (the repo must already be on GitHub):
+
+1. Go to <https://share.streamlit.io> → **New app** → pick this repository, branch `main`,
+   main file `app.py`.
+2. Open **Advanced settings** and set:
+   - **Python version → 3.13** — the pinned wheels are built for 3.11–3.13; 3.14/3.15
+     have no `torch`/`faiss-cpu` wheels, and Community Cloud's default may be newer.
+   - **Secrets** → paste (same names as your `.env`):
+
+     ```toml
+     GOOGLE_API_KEY = "paste-your-gemini-key-here"
+     # optional — override the default model
+     # GEMINI_MODEL = "gemini-3.5-flash"
+     ```
+
+     The app reads `.env` when running locally and `st.secrets` when deployed, so no code
+     change is needed. Never commit a real key — `.streamlit/secrets.toml` is already in
+     `.gitignore`.
+3. Click **Deploy**. The first build takes a few minutes (it installs the 196 MB CPU-only
+   `torch` wheel), and the first run downloads the ~90 MB embedding model — both cached
+   afterwards.
+
+**Keep the CPU-torch lines in `requirements.txt`.** The `--extra-index-url` line and the
+`torch==2.14.1+cpu` pin are what make the app fit Community Cloud's 1 GB resource limit;
+plain `torch` would install the CUDA build and fail the deploy.
+
+**Free-tier limits to know:** ~1 GB RAM per app, 3 apps per account, and apps sleep after
+a period of inactivity (the first request after waking takes ~30 seconds).
 
 ---
 

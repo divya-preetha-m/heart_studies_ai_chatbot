@@ -184,22 +184,44 @@ def load_environment() -> None:
     load_dotenv()
 
 
-def get_google_api_key() -> Optional[str]:
-    """Return the Gemini API key from the environment, or None if missing.
+def _secret(name: str) -> str:
+    """Read a value from Streamlit's secrets store, or "" if unavailable.
 
-    We accept both GOOGLE_API_KEY (documented in the spec) and GEMINI_API_KEY
-    (Google's own alternative name), never printing the value anywhere.
+    Streamlit Community Cloud has no .env file: you paste your secrets into
+    the app's "Advanced settings" dialog and they arrive here as TOML. Reading
+    st.secrets raises when no secrets file exists (normal when running
+    locally), so every failure path returns an empty string instead.
+    """
+    try:
+        import streamlit as st
+
+        return str(st.secrets[name] or "").strip()
+    except Exception:  # noqa: BLE001 - absent secrets must never crash the app
+        return ""
+
+
+def get_google_api_key() -> Optional[str]:
+    """Return the Gemini API key, or None if missing.
+
+    Checked in order: environment (.env locally) then Streamlit secrets
+    (Community Cloud). We accept both GOOGLE_API_KEY (our spec) and
+    GEMINI_API_KEY (Google's alternative name), and never print the value.
     """
     for name in ("GOOGLE_API_KEY", "GEMINI_API_KEY"):
-        value = os.environ.get(name, "").strip()
+        value = os.environ.get(name, "").strip() or _secret(name)
         if value and value != "your-gemini-api-key-here":
             return value
     return None
 
 
+def get_model_override() -> str:
+    """The model the student chose explicitly (.env or Streamlit secrets), if any."""
+    return os.environ.get("GEMINI_MODEL", "").strip() or _secret("GEMINI_MODEL")
+
+
 def get_model_name() -> str:
-    """Which Gemini model to use — overridable via the GEMINI_MODEL env var."""
-    return os.environ.get("GEMINI_MODEL", "").strip() or DEFAULT_GEMINI_MODEL
+    """Which Gemini model to use — overridable via GEMINI_MODEL (.env or secrets)."""
+    return get_model_override() or DEFAULT_GEMINI_MODEL
 
 
 # ---------------------------------------------------------------------------
@@ -381,7 +403,7 @@ def invoke_llm_prompt(
     # Without this, a busy default model makes the whole app feel broken.
     if text is not None or not _is_transient_error(error):
         return text, error
-    if os.environ.get("GEMINI_MODEL", "").strip():
+    if get_model_override():
         return text, error  # user chose this model explicitly — respect it
     try:
         fallback = get_llm(temperature=temperature, model=FALLBACK_GEMINI_MODEL)
