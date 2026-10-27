@@ -21,6 +21,8 @@ in rag.py / quiz.py / utils.py so this file stays readable.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import streamlit as st
 
 from quiz import format_review, generate_quiz, grade_quiz, score_message, topic_query
@@ -71,15 +73,73 @@ def init_session_state() -> None:
         "quiz": None,              # generated questions
         "quiz_result": None,       # grading result after submission
         "quiz_meta": "",           # label like "Intermediate • 5 questions • PDF mode"
+        "bundled_attempted": False,  # auto-load of sample_pdfs/ already tried this session?
+        "bundled_loaded": False,     # did that auto-load succeed?
     }
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
 
 
+SAMPLE_DIR = Path(__file__).resolve().parent / "sample_pdfs"
+
+
+def auto_load_bundled_samples() -> None:
+    """Index the PDFs shipped in sample_pdfs/ so every NEW session starts with
+    documents already available — no manual upload needed.
+
+    Runs at most once per session (guarded by `bundled_attempted`, even when it
+    fails, so a broken file cannot trigger a rebuild on every rerun) and never
+    replaces an index the student built themselves (guarded by `vector_store`).
+    Every failure is swallowed: the app still starts, and manual upload works.
+    """
+    if st.session_state.vector_store is not None or st.session_state.bundled_attempted:
+        return
+    st.session_state.bundled_attempted = True
+
+    try:
+        pdf_paths = sorted(SAMPLE_DIR.glob("*.pdf")) if SAMPLE_DIR.is_dir() else []
+        documents, stats = [], []
+        for path in pdf_paths:
+            name = safe_filename(path.name)
+            try:
+                pages = extract_text_per_page(path.read_bytes(), name)
+            except PDFProcessingError:
+                continue  # one broken bundled file must not block the others
+            docs = build_documents(pages, name)
+            if not docs:
+                continue
+            documents.extend(docs)
+            stats.append({"name": name, "pages": len(pages), "text_pages": len(docs), "chunks": 0})
+        if not documents:
+            return
+
+        chunks = split_documents(documents)
+        if not chunks:
+            return
+
+        per_file: dict[str, int] = {}
+        for c in chunks:
+            src = c.metadata.get("source", "unknown")
+            per_file[src] = per_file.get(src, 0) + 1
+        for s in stats:
+            s["chunks"] = per_file.get(s["name"], 0)
+
+        with st.spinner("📚 Loading bundled study material so your session starts ready to chat…"):
+            store = build_vector_store(chunks)
+    except Exception:  # noqa: BLE001 - never block the app; manual upload still works
+        return
+
+    st.session_state.vector_store = store
+    st.session_state.doc_stats = stats
+    st.session_state.messages = []          # fresh session => fresh conversation
+    st.session_state.bundled_loaded = True
+
+
 init_session_state()
 load_environment()
 api_key = get_google_api_key()
+auto_load_bundled_samples()
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +304,7 @@ def process_uploads(files) -> None:
     st.session_state.vector_store = store
     st.session_state.doc_stats = stats
     st.session_state.messages = []  # new documents => start a fresh conversation
+    st.session_state.bundled_loaded = False  # the student's own files replaced the samples
 
     total_chunks = sum(s["chunks"] for s in stats)
     st.success(
@@ -271,6 +332,11 @@ def _history_pairs(messages: list[dict]) -> list[tuple[str, str]]:
 def render_pdf_chat() -> None:
     st.header("\U0001f4c4 PDF Chat")
     st.caption("Upload your study materials, then ask questions — answers cite the file and page.")
+    if st.session_state.bundled_loaded:
+        st.caption(
+            "📚 Sample study material was loaded automatically — your session starts ready. "
+            "Upload your own PDFs below to replace it."
+        )
 
     uploads = st.file_uploader(
         "Upload heart study PDFs (max 5 files, 20 MB each)",
